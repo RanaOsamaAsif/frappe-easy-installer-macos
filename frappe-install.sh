@@ -73,7 +73,8 @@ cleanup() {
   echo ""
   print_error "Installation failed at step: ${CURRENT_STEP:-unknown}"
   print_info "The script is idempotent - fix the issue above and re-run"
-  print_info "Logs for the failed command were printed above"
+  print_info "If a command failed inside run_silent, logs were printed above"
+  print_info "If no logs appeared, failure happened in script control flow (not a wrapped command)"
 }
 trap cleanup EXIT
 
@@ -405,7 +406,11 @@ prompt_for_inputs() {
   echo "  MariaDB mode    :  $([[ \"$MANAGE_MARIADB\" == \"true\" ]] && echo managed || echo safe/reuse-existing)"
   echo ""
   read -rp "  Proceed? [Y/n]: " confirm
-  [[ "$confirm" =~ ^[Nn] ]] && exit 0
+  if [[ "$confirm" =~ ^[Nn] ]]; then
+    exit 0
+  fi
+
+  return 0
 }
 
 install_dependencies() {
@@ -702,7 +707,9 @@ main() {
 
   print_preflight_summary
 
+  CURRENT_STEP="Interactive prompts"
   prompt_for_inputs
+
   install_dependencies
   configure_services
   install_uv
