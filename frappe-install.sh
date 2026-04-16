@@ -39,8 +39,22 @@ spinner() {
   local remaining_fmt=""
 
   SPINNER_TIMED_OUT=0
+  SPINNER_STOPPED=0
 
   while kill -0 "$pid" 2>/dev/null; do
+    # Detect job-control stops (commonly SIGTTIN when a background command prompts).
+    if (( i % 12 == 0 )); then
+      local proc_state=""
+      proc_state="$("$PS_BIN" -o state= -p "$pid" 2>/dev/null | "$AWK_BIN" '{print $1}')"
+      if [[ "$proc_state" == "T" ]]; then
+        SPINNER_STOPPED=1
+        kill -TERM "$pid" 2>/dev/null || true
+        sleep 1
+        kill -KILL "$pid" 2>/dev/null || true
+        break
+      fi
+    fi
+
     elapsed=$((SECONDS - start))
 
     if (( timeout_seconds > 0 && elapsed >= timeout_seconds )); then
@@ -77,13 +91,22 @@ run_silent() {
   log=$(mktemp)
   local timeout_seconds="${RUN_TIMEOUT_SECONDS:-0}"
 
-  "$@" >"$log" 2>&1 &
+  "$@" </dev/null >"$log" 2>&1 &
   local pid=$!
 
   spinner "$pid" "$msg" "$timeout_seconds"
 
   local exit_code=0
   wait "$pid" || exit_code=$?
+
+  if [[ "${SPINNER_STOPPED:-0}" -eq 1 ]]; then
+    print_error "$msg - stopped while waiting for input (non-interactive mode)"
+    echo -e "\n${RED}--- Last 100 lines before stop ---${RESET}"
+    "$TAIL_BIN" -n 100 "$log" || true
+    echo -e "${RED}--- End ---${RESET}\n"
+    rm -f "$log"
+    return 125
+  fi
 
   if [[ "${SPINNER_TIMED_OUT:-0}" -eq 1 ]]; then
     print_error "$msg - timed out after ${timeout_seconds}s"
