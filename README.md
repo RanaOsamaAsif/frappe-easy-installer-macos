@@ -15,7 +15,7 @@ A single interactive Bash script that sets up a complete Frappe development envi
   - v16 (`Python 3.14`, `Node 24`, `MariaDB 11.8`)
 - Uses:
   - `uv` for Python/runtime tooling
-  - `volta` for Node/Yarn
+  - `volta` for Node and Yarn Classic (`1.22.x`)
 - Optional ERPNext installation.
 - Safe mode for existing MariaDB installs (recommended when migrating an existing setup).
 - Clear spinner-based UX with full logs only on failure.

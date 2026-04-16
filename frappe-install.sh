@@ -17,6 +17,7 @@ FRAPPE_15_MARIADB="10.11"
 FRAPPE_16_PYTHON="3.14"
 FRAPPE_16_NODE="24"
 FRAPPE_16_MARIADB="11.8"
+YARN_CLASSIC_VERSION="1.22.22"
 
 MARIADB_VERSION="$FRAPPE_15_MARIADB"
 BENCH_INIT_TIMEOUT=2700
@@ -640,6 +641,7 @@ install_volta() {
 
   VOLTA_HOME="$HOME/.volta"
   VOLTA_BIN="$VOLTA_HOME/bin/volta"
+  YARN_BIN="$VOLTA_HOME/bin/yarn"
 
   if [[ ! -f "$VOLTA_BIN" ]]; then
     run_silent "Installing volta (Node manager)" \
@@ -657,7 +659,17 @@ install_volta() {
   fi
 
   run_silent "Installing Node $NODE_VERSION" "$VOLTA_BIN" install "node@$NODE_VERSION"
-  run_silent "Installing Yarn" "$VOLTA_BIN" install yarn
+  run_silent "Installing Yarn $YARN_CLASSIC_VERSION (classic)" "$VOLTA_BIN" install "yarn@$YARN_CLASSIC_VERSION"
+
+  local yarn_version
+  yarn_version="$("$YARN_BIN" --version 2>/dev/null || true)"
+  if [[ ! "$yarn_version" =~ ^1\. ]]; then
+    print_error "Detected unsupported Yarn version: ${yarn_version:-unknown}"
+    print_info "Frappe bench currently requires Yarn classic (1.x) for '--check-files'"
+    print_info "Try: $VOLTA_BIN install yarn@$YARN_CLASSIC_VERSION"
+    exit 1
+  fi
+  print_ok "Using Yarn $yarn_version (classic)"
 }
 
 install_bench_cli() {
