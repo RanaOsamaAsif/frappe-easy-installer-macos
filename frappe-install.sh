@@ -18,6 +18,7 @@ FRAPPE_16_PYTHON="3.14"
 FRAPPE_16_NODE="24"
 FRAPPE_16_MARIADB="11.8"
 YARN_CLASSIC_VERSION="1.22.22"
+YARN_REGISTRY_URL="https://registry.npmjs.org"
 
 MARIADB_VERSION="$FRAPPE_15_MARIADB"
 BENCH_INIT_TIMEOUT=2700
@@ -670,6 +671,9 @@ install_volta() {
     exit 1
   fi
   print_ok "Using Yarn $yarn_version (classic)"
+
+  # Avoid registry.yarnpkg.com DNS issues by pinning Yarn to npmjs registry.
+  run_silent "Configuring Yarn registry" "$YARN_BIN" config set registry "$YARN_REGISTRY_URL"
 }
 
 install_bench_cli() {
@@ -701,6 +705,8 @@ initialize_bench() {
   }
 
   if [[ ! -d "$HOME/$BENCH_NAME" ]] || [[ "$SKIP_INIT" != "y" ]]; then
+    export YARN_REGISTRY="$YARN_REGISTRY_URL"
+    export npm_config_registry="$YARN_REGISTRY_URL"
     export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$HOMEBREW_PREFIX/bin:$PATH"
     RUN_TIMEOUT_SECONDS="$BENCH_INIT_TIMEOUT" run_silent "Initializing bench (this takes a few minutes)" run_bench_init
   else
