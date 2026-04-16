@@ -16,6 +16,7 @@ FRAPPE_16_PYTHON="3.12"
 FRAPPE_16_NODE="20"
 
 MARIADB_VERSION="10.11"
+BENCH_INIT_TIMEOUT=2700
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -28,15 +29,44 @@ print_error()   { echo -e "${RED}  ✗ $1${RESET}"; }
 print_info()    { echo -e "    ${BLUE}$1${RESET}"; }
 
 spinner() {
-  local pid=$1 msg=$2
+  local pid=$1 msg=$2 timeout_seconds=${3:-0}
   local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
   local i=0
+  local start=$SECONDS
+  local elapsed=0
+  local elapsed_fmt=""
+  local remaining=0
+  local remaining_fmt=""
+
+  SPINNER_TIMED_OUT=0
+
   while kill -0 "$pid" 2>/dev/null; do
-    printf "\r  ${CYAN}%s${RESET}  %s" "${frames[$((i % 10))]}" "$msg"
+    elapsed=$((SECONDS - start))
+
+    if (( timeout_seconds > 0 && elapsed >= timeout_seconds )); then
+      SPINNER_TIMED_OUT=1
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 2
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+
+    elapsed_fmt=$(printf "%02dm%02ds" $((elapsed / 60)) $((elapsed % 60)))
+    if (( timeout_seconds > 0 )); then
+      remaining=$((timeout_seconds - elapsed))
+      (( remaining < 0 )) && remaining=0
+      remaining_fmt=$(printf "%02dm%02ds" $((remaining / 60)) $((remaining % 60)))
+      printf "\r  ${CYAN}%s${RESET}  %s ${BLUE}[%s elapsed, %s left]${RESET}" \
+        "${frames[$((i % 10))]}" "$msg" "$elapsed_fmt" "$remaining_fmt"
+    else
+      printf "\r  ${CYAN}%s${RESET}  %s ${BLUE}[%s elapsed]${RESET}" \
+        "${frames[$((i % 10))]}" "$msg" "$elapsed_fmt"
+    fi
+
     sleep 0.08
     i=$((i + 1))
   done
-  printf "\r"
+  printf "\r\033[K"
 }
 
 run_silent() {
@@ -45,14 +75,24 @@ run_silent() {
 
   local log
   log=$(mktemp)
+  local timeout_seconds="${RUN_TIMEOUT_SECONDS:-0}"
 
   "$@" >"$log" 2>&1 &
   local pid=$!
 
-  spinner "$pid" "$msg"
+  spinner "$pid" "$msg" "$timeout_seconds"
 
   local exit_code=0
   wait "$pid" || exit_code=$?
+
+  if [[ "${SPINNER_TIMED_OUT:-0}" -eq 1 ]]; then
+    print_error "$msg - timed out after ${timeout_seconds}s"
+    echo -e "\n${RED}--- Last 100 lines before timeout ---${RESET}"
+    "$TAIL_BIN" -n 100 "$log" || true
+    echo -e "${RED}--- End ---${RESET}\n"
+    rm -f "$log"
+    return 124
+  fi
 
   if [[ $exit_code -ne 0 ]]; then
     print_error "$msg - failed"
@@ -89,6 +129,7 @@ GREP_BIN="/usr/bin/grep"
 LFS_BIN="/usr/sbin/lsof"
 PS_BIN="/bin/ps"
 BASENAME_BIN="/usr/bin/basename"
+TAIL_BIN="/usr/bin/tail"
 
 ARCH=""
 MACOS_VERSION=""
@@ -575,7 +616,7 @@ install_bench_cli() {
 
   BENCH_VENV="$HOME/.bench-cli"
   run_silent "Creating bench CLI environment" \
-    "$UV_BIN" venv "$BENCH_VENV" --python "$PYTHON_VERSION"
+    "$UV_BIN" venv "$BENCH_VENV" --python "$PYTHON_VERSION" --clear
 
   run_silent "Installing frappe-bench" \
     "$UV_BIN" pip install --python "$BENCH_VENV/bin/python" frappe-bench
@@ -586,10 +627,11 @@ install_bench_cli() {
 initialize_bench() {
   CURRENT_STEP="Initializing bench"
   print_header "Initializing bench"
+  print_info "Bench init timeout: $((BENCH_INIT_TIMEOUT / 60)) minutes"
 
   if [[ ! -d "$HOME/$BENCH_NAME" ]] || [[ "$SKIP_INIT" != "y" ]]; then
     export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$HOMEBREW_PREFIX/bin:$PATH"
-    run_silent "Initializing bench (this takes a few minutes)" \
+    RUN_TIMEOUT_SECONDS="$BENCH_INIT_TIMEOUT" run_silent "Initializing bench (this takes a few minutes)" \
       "$BENCH_BIN" init "$HOME/$BENCH_NAME" \
         --frappe-branch "$FRAPPE_VERSION" \
         --python "$BENCH_VENV/bin/python" \
