@@ -528,9 +528,16 @@ install_uv() {
 
   if [[ ! -f "$UV_BIN" ]]; then
     run_silent "Installing uv (Python manager)" \
-      "$BASH_BIN" -c "$CURL_BIN -LsSf $UV_INSTALL_URL | /bin/sh"
+      "$BASH_BIN" -c "set -euo pipefail; \"$CURL_BIN\" -LsSf \"$UV_INSTALL_URL\" | /bin/sh"
   else
     run_silent "Updating uv" "$UV_BIN" self update
+  fi
+
+  if [[ ! -x "$UV_BIN" ]]; then
+    print_error "uv binary not found at $UV_BIN after installation/update"
+    print_info "Check network/proxy and rerun the installer"
+    print_info "Manual command: $CURL_BIN -LsSf $UV_INSTALL_URL | /bin/sh"
+    exit 1
   fi
 
   export PATH="$HOME/.local/bin:$PATH"
@@ -545,11 +552,18 @@ install_volta() {
 
   if [[ ! -f "$VOLTA_BIN" ]]; then
     run_silent "Installing volta (Node manager)" \
-      "$BASH_BIN" -c "$CURL_BIN -fsSL $VOLTA_INSTALL_URL | /bin/bash -s -- --skip-setup"
+      "$BASH_BIN" -c "set -euo pipefail; \"$CURL_BIN\" -fsSL \"$VOLTA_INSTALL_URL\" | /bin/bash -s -- --skip-setup"
   fi
 
   export VOLTA_HOME="$HOME/.volta"
   export PATH="$VOLTA_HOME/bin:$PATH"
+
+  if [[ ! -x "$VOLTA_BIN" ]]; then
+    print_error "Volta binary not found at $VOLTA_BIN after installation"
+    print_info "Check network/proxy and rerun the installer"
+    print_info "Manual command: $CURL_BIN -fsSL $VOLTA_INSTALL_URL | /bin/bash -s -- --skip-setup"
+    exit 1
+  fi
 
   run_silent "Installing Node $NODE_VERSION" "$VOLTA_BIN" install "node@$NODE_VERSION"
   run_silent "Installing Yarn" "$VOLTA_BIN" install yarn
