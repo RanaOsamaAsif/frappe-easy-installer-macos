@@ -505,6 +505,12 @@ install_dependencies() {
     run_silent "Installing wkhtmltopdf" "$BREW_BIN" install --cask wkhtmltopdf
   fi
 
+  if command -v pkg-config >/dev/null 2>&1; then
+    print_ok "pkg-config already installed"
+  else
+    run_silent "Installing pkgconf (pkg-config)" "$BREW_BIN" install pkgconf
+  fi
+
   if [[ -d "$HOMEBREW_PREFIX/opt/mariadb@$MARIADB_VERSION/bin" ]]; then
     export PATH="$HOMEBREW_PREFIX/opt/mariadb@$MARIADB_VERSION/bin:$PATH"
   fi
@@ -652,13 +658,18 @@ initialize_bench() {
   print_header "Initializing bench"
   print_info "Bench init timeout: $((BENCH_INIT_TIMEOUT / 60)) minutes"
 
+  run_bench_init() {
+    # If bench init fails, bench may ask for rollback confirmation.
+    # Feed a default "n" so non-interactive runs do not hang.
+    printf 'n\n' | "$BENCH_BIN" init "$HOME/$BENCH_NAME" \
+      --frappe-branch "$FRAPPE_VERSION" \
+      --python "$BENCH_VENV/bin/python" \
+      --skip-assets
+  }
+
   if [[ ! -d "$HOME/$BENCH_NAME" ]] || [[ "$SKIP_INIT" != "y" ]]; then
     export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$HOMEBREW_PREFIX/bin:$PATH"
-    RUN_TIMEOUT_SECONDS="$BENCH_INIT_TIMEOUT" run_silent "Initializing bench (this takes a few minutes)" \
-      "$BENCH_BIN" init "$HOME/$BENCH_NAME" \
-        --frappe-branch "$FRAPPE_VERSION" \
-        --python "$BENCH_VENV/bin/python" \
-        --skip-assets
+    RUN_TIMEOUT_SECONDS="$BENCH_INIT_TIMEOUT" run_silent "Initializing bench (this takes a few minutes)" run_bench_init
   else
     print_ok "Skipping bench init (existing directory)"
   fi
