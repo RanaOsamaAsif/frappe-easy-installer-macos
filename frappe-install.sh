@@ -12,10 +12,13 @@ MARIADB_RESET_GUIDE_URL="https://gist.github.com/petehouston/13bfc8cba1991cc6741
 
 FRAPPE_15_PYTHON="3.11"
 FRAPPE_15_NODE="18"
-FRAPPE_16_PYTHON="3.12"
-FRAPPE_16_NODE="20"
+FRAPPE_15_MARIADB="10.11"
 
-MARIADB_VERSION="10.11"
+FRAPPE_16_PYTHON="3.14"
+FRAPPE_16_NODE="24"
+FRAPPE_16_MARIADB="11.8"
+
+MARIADB_VERSION="$FRAPPE_15_MARIADB"
 BENCH_INIT_TIMEOUT=2700
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -305,11 +308,18 @@ check_homebrew() {
 check_existing_mariadb() {
   print_step "Checking existing MariaDB/MySQL state"
 
-  if "$BREW_BIN" list "mariadb@$MARIADB_VERSION" >/dev/null 2>&1; then
+  local detected_mariadb_version=""
+  if "$BREW_BIN" list "mariadb@$FRAPPE_16_MARIADB" >/dev/null 2>&1; then
+    detected_mariadb_version="$FRAPPE_16_MARIADB"
+  elif "$BREW_BIN" list "mariadb@$FRAPPE_15_MARIADB" >/dev/null 2>&1; then
+    detected_mariadb_version="$FRAPPE_15_MARIADB"
+  fi
+
+  if [[ -n "$detected_mariadb_version" ]]; then
     MARIADB_INSTALLED="true"
-    print_ok "MariaDB $MARIADB_VERSION already installed"
+    print_ok "MariaDB $detected_mariadb_version already installed"
   else
-    print_info "MariaDB $MARIADB_VERSION not installed yet (will install)"
+    print_info "No supported MariaDB version detected yet (will install selected version)"
   fi
 
   local port_info
@@ -339,8 +349,10 @@ check_existing_mariadb() {
 
   local mysql_candidate=""
 
-  if [[ -x "$HOMEBREW_PREFIX/opt/mariadb@$MARIADB_VERSION/bin/mysql" ]]; then
-    mysql_candidate="$HOMEBREW_PREFIX/opt/mariadb@$MARIADB_VERSION/bin/mysql"
+  if [[ -x "$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_16_MARIADB/bin/mysql" ]]; then
+    mysql_candidate="$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_16_MARIADB/bin/mysql"
+  elif [[ -x "$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_15_MARIADB/bin/mysql" ]]; then
+    mysql_candidate="$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_15_MARIADB/bin/mysql"
   elif command -v mysql >/dev/null 2>&1; then
     mysql_candidate="$(command -v mysql)"
   fi
@@ -349,7 +361,7 @@ check_existing_mariadb() {
     if "$mysql_candidate" -u root -e "SELECT 1" >/dev/null 2>&1; then
       MARIADB_ROOT_PASSWORDLESS="true"
       print_ok "MariaDB root is accessible"
-    elif [[ "$MANAGE_MARIADB" == "true" ]] && "$BREW_BIN" list "mariadb@$MARIADB_VERSION" >/dev/null 2>&1; then
+    elif [[ "$MANAGE_MARIADB" == "true" && -n "$detected_mariadb_version" ]]; then
       if command -v mariadb >/dev/null 2>&1 && sudo -n mariadb -e "SELECT 1" >/dev/null 2>&1; then
         print_ok "MariaDB root accessible with sudo fallback"
       else
@@ -379,8 +391,8 @@ prompt_for_inputs() {
   print_header "Frappe version"
   echo "  Which version would you like to install?"
   echo ""
-  echo "  [1] Frappe v15  (Python 3.11, Node 18, stable)"
-  echo "  [2] Frappe v16  (Python 3.12, Node 20, latest)"
+  echo "  [1] Frappe v15  (Python 3.11, Node 18, MariaDB 10.11, stable)"
+  echo "  [2] Frappe v16  (Python 3.14, Node 24, MariaDB 11.8, latest)"
   echo ""
   read -rp "  Enter choice [1/2]: " version_choice
 
@@ -389,11 +401,13 @@ prompt_for_inputs() {
       FRAPPE_VERSION="version-15"
       PYTHON_VERSION="$FRAPPE_15_PYTHON"
       NODE_VERSION="$FRAPPE_15_NODE"
+      MARIADB_VERSION="$FRAPPE_15_MARIADB"
       ;;
     2)
       FRAPPE_VERSION="version-16"
       PYTHON_VERSION="$FRAPPE_16_PYTHON"
       NODE_VERSION="$FRAPPE_16_NODE"
+      MARIADB_VERSION="$FRAPPE_16_MARIADB"
       ;;
     *)
       print_error "Invalid choice"
@@ -464,6 +478,7 @@ prompt_for_inputs() {
   echo "  Frappe version  :  $FRAPPE_VERSION"
   echo "  Python          :  $PYTHON_VERSION"
   echo "  Node            :  $NODE_VERSION"
+  echo "  MariaDB         :  $MARIADB_VERSION"
   echo "  Bench folder    :  $HOME/$BENCH_NAME"
   echo "  Site name       :  $SITE_NAME"
   echo "  ERPNext         :  $([[ $INSTALL_ERPNEXT =~ ^[Yy] ]] && echo yes || echo no)"
@@ -503,6 +518,12 @@ install_dependencies() {
     print_ok "wkhtmltopdf already installed"
   else
     run_silent "Installing wkhtmltopdf" "$BREW_BIN" install --cask wkhtmltopdf
+  fi
+
+  if "$BREW_BIN" list mariadb-connector-c >/dev/null 2>&1; then
+    print_ok "mariadb-connector-c already installed"
+  else
+    run_silent "Installing mariadb-connector-c" "$BREW_BIN" install mariadb-connector-c
   fi
 
   if command -v pkg-config >/dev/null 2>&1; then

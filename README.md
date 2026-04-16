@@ -11,8 +11,8 @@ A single interactive Bash script that sets up a complete Frappe development envi
 - macOS-only, with Apple Silicon and Intel Homebrew path handling.
 - Pre-flight checks before any installation starts.
 - Frappe version choice:
-  - v15 (`Python 3.11`, `Node 18`)
-  - v16 (`Python 3.12`, `Node 20`)
+  - v15 (`Python 3.11`, `Node 18`, `MariaDB 10.11`)
+  - v16 (`Python 3.14`, `Node 24`, `MariaDB 11.8`)
 - Uses:
   - `uv` for Python/runtime tooling
   - `volta` for Node/Yarn
