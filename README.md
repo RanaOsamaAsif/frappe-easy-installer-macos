@@ -1,6 +1,5 @@
 # Frappe Easy Installer (macOS)
 
-[![GitHub Release](https://img.shields.io/github/v/release/RanaOsamaAsif/frappe-easy-installer-macos?style=for-the-badge)](https://github.com/RanaOsamaAsif/frappe-easy-installer-macos/releases)
 [![GitHub License](https://img.shields.io/github/license/RanaOsamaAsif/frappe-easy-installer-macos?style=for-the-badge)](https://github.com/RanaOsamaAsif/frappe-easy-installer-macos/blob/main/LICENSE)
 [![GitHub Last Commit](https://img.shields.io/github/last-commit/RanaOsamaAsif/frappe-easy-installer-macos?style=for-the-badge)](https://github.com/RanaOsamaAsif/frappe-easy-installer-macos/commits/main)
 [![Status](https://img.shields.io/badge/status-actively%20maintained-brightgreen?style=for-the-badge)](https://github.com/RanaOsamaAsif/frappe-easy-installer-macos)
@@ -68,4 +67,3 @@ If you do not, it fails fast and points you to the reset guide:
 ## License
 
 MIT. See [LICENSE](./LICENSE).
-
