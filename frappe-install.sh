@@ -158,6 +158,8 @@ LFS_BIN="/usr/sbin/lsof"
 PS_BIN="/bin/ps"
 BASENAME_BIN="/usr/bin/basename"
 TAIL_BIN="/usr/bin/tail"
+DIRNAME_BIN="/usr/bin/dirname"
+PWD_BIN="/bin/pwd"
 
 ARCH=""
 MACOS_VERSION=""
@@ -181,6 +183,8 @@ MARIADB_INSTALLED="false"
 MARIADB_PORT_IN_USE="false"
 MANAGE_MARIADB="true"
 MARIADB_ROOT_PASSWORDLESS="false"
+SCRIPT_DIR=""
+CUSTOM_APPS_FILE=""
 
 check_macos() {
   print_step "Checking macOS compatibility"
@@ -762,6 +766,121 @@ install_erpnext_if_requested() {
   fi
 }
 
+trim_line() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+is_supported_app_source() {
+  case "$1" in
+    http://*|https://*|ssh://*|git@*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+app_name_from_source() {
+  local source="$1"
+  source="${source%/}"
+
+  local name="${source##*/}"
+
+  name="${name%.git}"
+  printf '%s' "$name"
+}
+
+install_custom_apps_if_present() {
+  CURRENT_STEP="Installing custom apps"
+
+  if [[ ! -f "$CUSTOM_APPS_FILE" ]]; then
+    print_info "No apps.txt found - skipping custom apps"
+    return
+  fi
+
+  local app_urls=()
+  local app_branches=()
+  local app_names=()
+  local line_no=0
+  local raw_line=""
+  local line=""
+
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    line_no=$((line_no + 1))
+    line="$(trim_line "$raw_line")"
+
+    [[ -z "$line" || "$line" == \#* ]] && continue
+
+    local app_url=""
+    local app_branch=""
+    local extra=""
+    local old_ifs="$IFS"
+    IFS=$' \t'
+    read -r app_url app_branch extra <<< "$line"
+    IFS="$old_ifs"
+
+    if [[ -n "$extra" ]]; then
+      print_error "Invalid apps.txt line $line_no: expected '<git_url> [branch]'"
+      exit 1
+    fi
+
+    if ! is_supported_app_source "$app_url"; then
+      print_error "Invalid apps.txt line $line_no: unsupported app source '$app_url'"
+      print_info "Use https://, http://, ssh://, or git@ Git URLs"
+      exit 1
+    fi
+
+    local app_name
+    app_name="$(app_name_from_source "$app_url")"
+
+    if [[ -z "$app_name" || ! "$app_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+      print_error "Invalid apps.txt line $line_no: could not infer app name from '$app_url'"
+      print_info "The repository name should match the Frappe app name"
+      exit 1
+    fi
+
+    app_urls+=("$app_url")
+    app_branches+=("$app_branch")
+    app_names+=("$app_name")
+  done < "$CUSTOM_APPS_FILE"
+
+  if [[ ${#app_urls[@]} -eq 0 ]]; then
+    print_info "No custom apps listed in $CUSTOM_APPS_FILE - skipping custom apps"
+    return
+  fi
+
+  print_header "Installing custom apps"
+  print_info "Using $CUSTOM_APPS_FILE"
+
+  export YARN_REGISTRY="$YARN_REGISTRY_URL"
+  export npm_config_registry="$YARN_REGISTRY_URL"
+  export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$HOMEBREW_PREFIX/bin:$PATH"
+
+  local index
+  for ((index = 0; index < ${#app_urls[@]}; index++)); do
+    local app_url="${app_urls[$index]}"
+    local app_branch="${app_branches[$index]}"
+    local app_name="${app_names[$index]}"
+
+    if [[ -d "$HOME/$BENCH_NAME/apps/$app_name" ]]; then
+      print_ok "$app_name app already fetched"
+    elif [[ -n "$app_branch" ]]; then
+      run_silent "Fetching $app_name ($app_branch)" \
+        "$BENCH_BIN" get-app "$app_url" --branch "$app_branch"
+    else
+      run_silent "Fetching $app_name" \
+        "$BENCH_BIN" get-app "$app_url"
+    fi
+
+    if "$BENCH_BIN" --site "$SITE_NAME" list-apps 2>/dev/null | "$GREP_BIN" -qx "$app_name"; then
+      print_ok "$app_name already installed on $SITE_NAME"
+    else
+      run_silent "Installing $app_name on $SITE_NAME" \
+        "$BENCH_BIN" --site "$SITE_NAME" install-app "$app_name"
+    fi
+  done
+}
+
 build_assets() {
   CURRENT_STEP="Building assets"
   print_header "Building assets"
@@ -821,6 +940,9 @@ print_completion() {
 }
 
 main() {
+  SCRIPT_DIR="$(cd "$("$DIRNAME_BIN" "${BASH_SOURCE[0]}")" && "$PWD_BIN")"
+  CUSTOM_APPS_FILE="$SCRIPT_DIR/apps.txt"
+
   print_header "Frappe Mac Installer v$SCRIPT_VERSION"
 
   CURRENT_STEP="Pre-flight checks"
@@ -847,6 +969,7 @@ main() {
   initialize_bench
   create_site
   install_erpnext_if_requested
+  install_custom_apps_if_present
   build_assets
   persist_shell_env
   print_completion

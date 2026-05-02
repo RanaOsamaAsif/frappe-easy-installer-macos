@@ -17,6 +17,7 @@ A single interactive Bash script that sets up a complete Frappe development envi
   - `uv` for Python/runtime tooling
   - `volta` for Node and Yarn Classic (`1.22.x`)
 - Optional ERPNext installation.
+- Optional ordered custom app installation from `apps.txt`.
 - Safe mode for existing MariaDB installs (recommended when migrating an existing setup).
 - Clear spinner-based UX with full logs only on failure.
 
@@ -49,14 +50,32 @@ If you do not, it fails fast and points you to the reset guide:
 
 - https://gist.github.com/petehouston/13bfc8cba1991cc6741fbe28cfa5491c
 
+## Custom Apps
+
+Add optional Frappe apps to `apps.txt` before running the installer.
+
+```txt
+# <git_url> [branch]
+https://github.com/frappe/hrms.git version-16
+https://github.com/frappe/payments.git version-16
+```
+
+Rules:
+
+- Apps install top-to-bottom after the site is created.
+- Blank lines and full-line comments are ignored.
+- Leave `apps.txt` comment-only to skip custom apps.
+- The optional branch column is recommended for versioned Frappe apps.
+- The repository name should match the Frappe app name because the installer uses it for idempotency and `bench install-app`.
+
 ## What This Installer Does
 
 1. Runs compatibility and environment checks.
-2. Installs required dependencies (`mariadb@10.11`, `redis`, `wkhtmltopdf`) when needed.
+2. Installs required dependencies (`mariadb`, `redis`, `wkhtmltopdf`) when needed.
 3. Installs or updates `uv` and `volta`.
 4. Creates a dedicated bench CLI virtual environment.
 5. Initializes bench (or reuses existing bench if selected).
-6. Creates/uses site, optionally installs ERPNext, and builds assets.
+6. Creates/uses site, optionally installs ERPNext and apps from `apps.txt`, then builds assets.
 7. Persists minimal shell exports for `uv`/`volta`.
 
 ## Scope

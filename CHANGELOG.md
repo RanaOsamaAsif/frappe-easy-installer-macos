@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [1.0.1] - 2026-04-16
 
+### Added
+
+- Added optional ordered custom app installation from `apps.txt`.
+
 ### Fixed
 
 - Prevented false early exit after confirmation prompt due to strict-mode shell flow.
@@ -39,4 +43,3 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   - `volta` for Node/Yarn
   - bench CLI setup, bench init, site creation, optional ERPNext, and asset build
 - README and MIT license.
-

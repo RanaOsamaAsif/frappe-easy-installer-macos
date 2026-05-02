@@ -1,0 +1,11 @@
+# Optional custom apps to install after bench/site creation.
+# Blank lines and full-line comments are ignored.
+#
+# Format:
+# <git_url> [branch]
+#
+# Apps are installed top-to-bottom. Leave this file comment-only to skip.
+#
+# Examples:
+# https://github.com/frappe/hrms.git version-16
+# https://github.com/frappe/payments.git version-16
