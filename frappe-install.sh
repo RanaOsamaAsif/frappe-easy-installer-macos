@@ -185,6 +185,9 @@ MANAGE_MARIADB="true"
 MARIADB_ROOT_PASSWORDLESS="false"
 SCRIPT_DIR=""
 CUSTOM_APPS_FILE=""
+CUSTOM_APP_URLS=()
+CUSTOM_APP_BRANCHES=()
+CUSTOM_APP_NAMES=()
 
 check_macos() {
   print_step "Checking macOS compatibility"
@@ -790,17 +793,15 @@ app_name_from_source() {
   printf '%s' "$name"
 }
 
-install_custom_apps_if_present() {
-  CURRENT_STEP="Installing custom apps"
+load_custom_apps_file() {
+  CUSTOM_APP_URLS=()
+  CUSTOM_APP_BRANCHES=()
+  CUSTOM_APP_NAMES=()
 
   if [[ ! -f "$CUSTOM_APPS_FILE" ]]; then
-    print_info "No apps.txt found - skipping custom apps"
     return
   fi
 
-  local app_urls=()
-  local app_branches=()
-  local app_names=()
   local line_no=0
   local raw_line=""
   local line=""
@@ -839,12 +840,23 @@ install_custom_apps_if_present() {
       exit 1
     fi
 
-    app_urls+=("$app_url")
-    app_branches+=("$app_branch")
-    app_names+=("$app_name")
+    CUSTOM_APP_URLS+=("$app_url")
+    CUSTOM_APP_BRANCHES+=("$app_branch")
+    CUSTOM_APP_NAMES+=("$app_name")
   done < "$CUSTOM_APPS_FILE"
+}
 
-  if [[ ${#app_urls[@]} -eq 0 ]]; then
+install_custom_apps_if_present() {
+  CURRENT_STEP="Installing custom apps"
+
+  if [[ ! -f "$CUSTOM_APPS_FILE" ]]; then
+    print_info "No apps.txt found - skipping custom apps"
+    return
+  fi
+
+  load_custom_apps_file
+
+  if [[ ${#CUSTOM_APP_URLS[@]} -eq 0 ]]; then
     print_info "No custom apps listed in $CUSTOM_APPS_FILE - skipping custom apps"
     return
   fi
@@ -857,10 +869,10 @@ install_custom_apps_if_present() {
   export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$HOMEBREW_PREFIX/bin:$PATH"
 
   local index
-  for ((index = 0; index < ${#app_urls[@]}; index++)); do
-    local app_url="${app_urls[$index]}"
-    local app_branch="${app_branches[$index]}"
-    local app_name="${app_names[$index]}"
+  for ((index = 0; index < ${#CUSTOM_APP_URLS[@]}; index++)); do
+    local app_url="${CUSTOM_APP_URLS[$index]}"
+    local app_branch="${CUSTOM_APP_BRANCHES[$index]}"
+    local app_name="${CUSTOM_APP_NAMES[$index]}"
 
     if [[ -d "$HOME/$BENCH_NAME/apps/$app_name" ]]; then
       print_ok "$app_name app already fetched"
@@ -885,6 +897,94 @@ build_assets() {
   CURRENT_STEP="Building assets"
   print_header "Building assets"
   run_silent "Building assets" "$BENCH_BIN" build
+}
+
+assert_installed_app() {
+  local installed_apps="$1"
+  local app_name="$2"
+
+  if printf '%s\n' "$installed_apps" | "$AWK_BIN" '{print $1}' | "$GREP_BIN" -qx "$app_name"; then
+    print_ok "$app_name is installed on $SITE_NAME"
+    return
+  fi
+
+  print_error "$app_name is not installed on $SITE_NAME"
+  exit 1
+}
+
+final_health_check() {
+  CURRENT_STEP="Final health check"
+  print_header "Final health check"
+
+  if [[ ! -x "$BENCH_BIN" ]]; then
+    print_error "Bench CLI not found at $BENCH_BIN"
+    exit 1
+  fi
+  print_ok "Bench CLI is available"
+
+  if [[ ! -d "$HOME/$BENCH_NAME" ]]; then
+    print_error "Bench directory not found: $HOME/$BENCH_NAME"
+    exit 1
+  fi
+  print_ok "Bench directory exists"
+
+  if [[ ! -d "$HOME/$BENCH_NAME/sites/$SITE_NAME" ]]; then
+    print_error "Site directory not found: $HOME/$BENCH_NAME/sites/$SITE_NAME"
+    exit 1
+  fi
+  print_ok "Site directory exists"
+
+  local current_site_file="$HOME/$BENCH_NAME/sites/currentsite.txt"
+  local current_site=""
+  if [[ -f "$current_site_file" ]]; then
+    read -r current_site < "$current_site_file" || true
+  fi
+
+  if [[ "$current_site" != "$SITE_NAME" ]]; then
+    print_error "Default site is not set to $SITE_NAME"
+    print_info "Run manually: cd $HOME/$BENCH_NAME && $BENCH_BIN use $SITE_NAME"
+    exit 1
+  fi
+  print_ok "Default site is $SITE_NAME"
+
+  local installed_apps=""
+  if ! installed_apps="$("$BENCH_BIN" --site "$SITE_NAME" list-apps 2>&1)"; then
+    print_error "Could not list installed apps for $SITE_NAME"
+    echo -e "\n${RED}--- Output ---${RESET}"
+    printf '%s\n' "$installed_apps"
+    echo -e "${RED}--- End ---${RESET}\n"
+    exit 1
+  fi
+  print_ok "Site responds to bench commands"
+
+  assert_installed_app "$installed_apps" "frappe"
+
+  if [[ "$INSTALL_ERPNEXT" =~ ^[Yy]$ ]]; then
+    assert_installed_app "$installed_apps" "erpnext"
+  fi
+
+  load_custom_apps_file
+  local index
+  for ((index = 0; index < ${#CUSTOM_APP_NAMES[@]}; index++)); do
+    assert_installed_app "$installed_apps" "${CUSTOM_APP_NAMES[$index]}"
+  done
+
+  local redis_server_bin="$HOMEBREW_PREFIX/bin/redis-server"
+  if [[ -x "$redis_server_bin" ]]; then
+    print_ok "Redis binary is available"
+  else
+    print_warn "Redis binary was not found at $redis_server_bin"
+  fi
+
+  local wkhtmltopdf_bin
+  wkhtmltopdf_bin="$(command -v wkhtmltopdf || true)"
+  if [[ -n "$wkhtmltopdf_bin" ]]; then
+    print_ok "wkhtmltopdf is available"
+  else
+    print_warn "wkhtmltopdf was not found in PATH; PDF generation may need manual attention"
+  fi
+
+  print_ok "Final health check passed"
 }
 
 detect_shell_config() {
@@ -971,6 +1071,7 @@ main() {
   install_erpnext_if_requested
   install_custom_apps_if_present
   build_assets
+  final_health_check
   persist_shell_env
   print_completion
 }

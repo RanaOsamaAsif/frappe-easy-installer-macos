@@ -10,6 +10,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Added optional ordered custom app installation from `apps.txt`.
+- Added final health check for bench, site, installed apps, and key binaries.
 
 ### Fixed
 
