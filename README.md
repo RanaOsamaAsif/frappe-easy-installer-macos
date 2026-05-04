@@ -50,6 +50,7 @@ Choose `Y` (recommended) to avoid modifying your current MariaDB configuration, 
 If root passwordless access is unavailable in safe mode, the script asks whether you remember the root password.
 It now validates the password immediately and gives you up to three attempts before continuing.
 During site creation, safe mode also uses an isolated MariaDB client for Frappe's SQL import so user/global client SSL settings do not interfere with a local non-SSL server.
+If a stale site database user exists without a matching database, the installer resets that user before creation so old account requirements do not leak into the new site.
 If you do not, it fails fast and points you to the reset guide:
 
 - https://gist.github.com/petehouston/13bfc8cba1991cc6741fbe28cfa5491c

@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="1.0.5"
+SCRIPT_VERSION="1.0.6"
 MIN_MACOS_MAJOR=13
 MIN_UV_VERSION="0.9.0"
 HOMEBREW_PREFIX_ARM="/opt/homebrew"
@@ -323,6 +323,28 @@ run_mariadb_root_sql() {
     mysql_root_query "$mysql_bin" "$password" "$query" --protocol=TCP --host="$DB_CONNECT_HOST" --port="${DB_CONNECT_PORT:-3306}"
   else
     mysql_root_query "$mysql_bin" "$password" "$query"
+  fi
+}
+
+run_mariadb_root_scalar() {
+  local password=$1
+  local query=$2
+  local mysql_bin=""
+
+  mysql_bin="${DB_CLIENT_BIN:-}"
+  if [[ -z "$mysql_bin" || ! -x "$mysql_bin" ]]; then
+    mysql_bin="$(find_mysql_client_bin || true)"
+  fi
+  if [[ -z "$mysql_bin" ]]; then
+    return 1
+  fi
+
+  if [[ -n "$DB_CONNECT_SOCKET" ]]; then
+    mysql_root_scalar "$mysql_bin" "$password" "$query" --socket="$DB_CONNECT_SOCKET"
+  elif [[ -n "$DB_CONNECT_HOST" ]]; then
+    mysql_root_scalar "$mysql_bin" "$password" "$query" --protocol=TCP --host="$DB_CONNECT_HOST" --port="${DB_CONNECT_PORT:-3306}"
+  else
+    mysql_root_scalar "$mysql_bin" "$password" "$query"
   fi
 }
 
@@ -1160,6 +1182,30 @@ reset_site_mariadb_user() {
   run_mariadb_root_sql "$DB_ROOT_PASSWORD" "$sql"
 }
 
+mariadb_database_exists() {
+  local db_name=$1
+  local exists=""
+
+  exists="$(run_mariadb_root_scalar "$DB_ROOT_PASSWORD" "SELECT IF(EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '$db_name'), '1', '0');" | "$AWK_BIN" 'NR == 1 {print $1}' || true)"
+  [[ "$exists" == "1" ]]
+}
+
+reset_stale_site_user_before_create() {
+  local db_name=$1
+
+  if [[ "$MANAGE_MARIADB" == "true" ]]; then
+    return 0
+  fi
+
+  if mariadb_database_exists "$db_name"; then
+    print_warn "Database $db_name already exists; leaving existing MariaDB user untouched"
+    print_info "If site creation still fails, remove the stale site directory or database intentionally, then rerun."
+    return 0
+  fi
+
+  run_silent "Resetting stale MariaDB user $db_name" reset_site_mariadb_user "$db_name"
+}
+
 prepare_safe_mode_mariadb_client() {
   if [[ "$MANAGE_MARIADB" == "true" ]]; then
     return 0
@@ -1228,6 +1274,8 @@ create_site() {
       if [[ "$MANAGE_MARIADB" != "true" ]]; then
         run_silent "Resetting stale MariaDB user $db_name" reset_site_mariadb_user "$db_name"
       fi
+    else
+      reset_stale_site_user_before_create "$db_name"
     fi
 
     if [[ -n "$DB_CONNECT_SOCKET" ]]; then

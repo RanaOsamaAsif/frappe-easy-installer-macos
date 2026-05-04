@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-05-04
+
+### Fixed
+
+- Reset stale safe-mode site database users before first site creation when the target database does not exist, preventing old account requirements such as `REQUIRE SSL` from surviving Frappe's `CREATE USER IF NOT EXISTS` path.
+
 ## [1.0.5] - 2026-05-04
 
 ### Fixed
