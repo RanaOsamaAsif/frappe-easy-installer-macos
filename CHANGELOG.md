@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-05-04
+
+### Fixed
+
+- Explicitly disabled SSL in the isolated safe-mode MariaDB import client and unset inherited MySQL/MariaDB SSL environment variables before Frappe's shell restore runs.
+- Verified the isolated import client against the same root route before site creation so client SSL issues fail earlier with a clearer message.
+
 ## [1.0.6] - 2026-05-04
 
 ### Fixed

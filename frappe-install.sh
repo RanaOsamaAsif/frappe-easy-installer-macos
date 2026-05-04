@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="1.0.6"
+SCRIPT_VERSION="1.0.7"
 MIN_MACOS_MAJOR=13
 MIN_UV_VERSION="0.9.0"
 HOMEBREW_PREFIX_ARM="/opt/homebrew"
@@ -345,6 +345,34 @@ run_mariadb_root_scalar() {
     mysql_root_scalar "$mysql_bin" "$password" "$query" --protocol=TCP --host="$DB_CONNECT_HOST" --port="${DB_CONNECT_PORT:-3306}"
   else
     mysql_root_scalar "$mysql_bin" "$password" "$query"
+  fi
+}
+
+mysql_root_query_on_verified_route() {
+  local mysql_bin=$1
+  local password=$2
+  local query=$3
+  shift 3
+
+  if [[ -n "$DB_CONNECT_SOCKET" ]]; then
+    mysql_root_query "$mysql_bin" "$password" "$query" "$@" --socket="$DB_CONNECT_SOCKET"
+  elif [[ -n "$DB_CONNECT_HOST" ]]; then
+    mysql_root_query "$mysql_bin" "$password" "$query" "$@" --protocol=TCP --host="$DB_CONNECT_HOST" --port="${DB_CONNECT_PORT:-3306}"
+  else
+    mysql_root_query "$mysql_bin" "$password" "$query" "$@"
+  fi
+}
+
+detect_mysql_disable_ssl_arg() {
+  local mysql_bin=$1
+  local password=$2
+
+  if mysql_root_query_on_verified_route "$mysql_bin" "$password" "SELECT 1;" --no-defaults --skip-ssl; then
+    printf '%s\n' "--skip-ssl"
+  elif mysql_root_query_on_verified_route "$mysql_bin" "$password" "SELECT 1;" --no-defaults --ssl=0; then
+    printf '%s\n' "--ssl=0"
+  elif mysql_root_query_on_verified_route "$mysql_bin" "$password" "SELECT 1;" --no-defaults --ssl-mode=DISABLED; then
+    printf '%s\n' "--ssl-mode=DISABLED"
   fi
 }
 
@@ -1223,7 +1251,13 @@ prepare_safe_mode_mariadb_client() {
   fi
 
   local shim_dir="$HOME/$BENCH_NAME/.frappe-installer-bin"
+  local disable_ssl_arg=""
   local wrapper=""
+
+  disable_ssl_arg="$(detect_mysql_disable_ssl_arg "$mysql_bin" "$DB_ROOT_PASSWORD")"
+  if [[ -z "$disable_ssl_arg" ]]; then
+    print_warn "Could not verify a MariaDB client SSL-disable flag; using --no-defaults only"
+  fi
 
   mkdir -p "$shim_dir"
 
@@ -1231,12 +1265,19 @@ prepare_safe_mode_mariadb_client() {
     cat > "$shim_dir/$wrapper" <<SHIM
 #!/usr/bin/env bash
 export MYSQL_TEST_LOGIN_FILE=/dev/null
-exec "$mysql_bin" --no-defaults "\$@"
+unset MYSQL_SSL MYSQL_SSL_CA MYSQL_SSL_CAPATH MYSQL_SSL_CERT MYSQL_SSL_CIPHER MYSQL_SSL_KEY MYSQL_SSL_VERIFY_SERVER_CERT MYSQL_SSL_MODE
+unset MARIADB_SSL MARIADB_SSL_CA MARIADB_SSL_CAPATH MARIADB_SSL_CERT MARIADB_SSL_CIPHER MARIADB_SSL_KEY MARIADB_SSL_VERIFY_SERVER_CERT MARIADB_SSL_MODE
+exec "$mysql_bin" --no-defaults $disable_ssl_arg "\$@"
 SHIM
     "$CHMOD_BIN" 700 "$shim_dir/$wrapper"
   done
 
   export PATH="$shim_dir:$PATH"
+  if ! mysql_root_query_on_verified_route "$shim_dir/mariadb" "$DB_ROOT_PASSWORD" "SELECT 1;"; then
+    print_error "Isolated MariaDB client could not connect over the verified route"
+    print_info "Check local MariaDB client SSL environment/config and rerun."
+    exit 1
+  fi
   print_ok "Using isolated MariaDB client for bench database import"
 }
 
