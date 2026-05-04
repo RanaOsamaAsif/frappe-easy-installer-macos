@@ -2,8 +2,9 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.4"
 MIN_MACOS_MAJOR=13
+MIN_UV_VERSION="0.9.0"
 HOMEBREW_PREFIX_ARM="/opt/homebrew"
 HOMEBREW_PREFIX_INTEL="/usr/local"
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
@@ -141,6 +142,272 @@ run_silent() {
   print_ok "$msg"
 }
 
+version_ge() {
+  local current=$1
+  local minimum=$2
+
+  "$AWK_BIN" -v current="$current" -v minimum="$minimum" '
+    BEGIN {
+      split(current, c, ".")
+      split(minimum, m, ".")
+
+      for (i = 1; i <= 3; i++) {
+        cv = (c[i] == "" ? 0 : c[i]) + 0
+        mv = (m[i] == "" ? 0 : m[i]) + 0
+
+        if (cv > mv) {
+          exit 0
+        }
+        if (cv < mv) {
+          exit 1
+        }
+      }
+
+      exit 0
+    }
+  '
+}
+
+get_uv_version() {
+  local uv_bin=$1
+  local version_output
+
+  version_output="$("$uv_bin" --version 2>/dev/null || true)"
+  echo "$version_output" | "$AWK_BIN" 'NR == 1 {print $2}'
+}
+
+find_uv_bin() {
+  local path_uv=""
+  local local_uv="$HOME/.local/bin/uv"
+  local candidate
+  local version
+  local candidates=()
+
+  path_uv="$(command -v uv || true)"
+  if [[ -n "$path_uv" && -x "$path_uv" ]]; then
+    candidates+=("$path_uv")
+  fi
+
+  if [[ -x "$local_uv" && "$path_uv" != "$local_uv" ]]; then
+    candidates+=("$local_uv")
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    version="$(get_uv_version "$candidate")"
+    if [[ -n "$version" ]] && version_ge "$version" "$MIN_UV_VERSION"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if (( ${#candidates[@]} > 0 )); then
+    echo "${candidates[0]}"
+    return 0
+  fi
+
+  return 1
+}
+
+find_mysql_client_bin() {
+  local candidates=(
+    "$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_16_MARIADB/bin/mariadb"
+    "$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_16_MARIADB/bin/mysql"
+    "$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_15_MARIADB/bin/mariadb"
+    "$HOMEBREW_PREFIX/opt/mariadb@$FRAPPE_15_MARIADB/bin/mysql"
+    "$HOMEBREW_PREFIX/bin/mariadb"
+    "$HOMEBREW_PREFIX/bin/mysql"
+  )
+  local candidate=""
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v mariadb >/dev/null 2>&1; then
+    command -v mariadb
+    return 0
+  fi
+
+  if command -v mysql >/dev/null 2>&1; then
+    command -v mysql
+    return 0
+  fi
+
+  return 1
+}
+
+mysql_root_query() {
+  local mysql_bin=$1
+  local password=$2
+  local query=$3
+  shift 3
+
+  if [[ -n "$password" ]]; then
+    MYSQL_PWD="$password" "$mysql_bin" "$@" --user=root --batch --skip-column-names --execute "$query" >/dev/null 2>&1
+  else
+    "$mysql_bin" "$@" --user=root --batch --skip-column-names --execute "$query" >/dev/null 2>&1
+  fi
+}
+
+mysql_root_scalar() {
+  local mysql_bin=$1
+  local password=$2
+  local query=$3
+  shift 3
+
+  if [[ -n "$password" ]]; then
+    MYSQL_PWD="$password" "$mysql_bin" "$@" --user=root --batch --skip-column-names --execute "$query" 2>/dev/null
+  else
+    "$mysql_bin" "$@" --user=root --batch --skip-column-names --execute "$query" 2>/dev/null
+  fi
+}
+
+validate_mariadb_root_access() {
+  local password=$1
+  local mysql_bin=""
+  local socket_path=""
+
+  mysql_bin="$(find_mysql_client_bin || true)"
+  if [[ -z "$mysql_bin" ]]; then
+    print_error "MariaDB/MySQL client was not found"
+    print_info "Install MariaDB client tools or make mariadb/mysql available in PATH."
+    return 1
+  fi
+
+  if mysql_root_query "$mysql_bin" "$password" "SELECT 1;" --protocol=TCP --host=127.0.0.1 --port=3306; then
+    DB_CONNECT_HOST="127.0.0.1"
+    DB_CONNECT_PORT="3306"
+    DB_CONNECT_SOCKET=""
+    DB_USER_HOST_LOGIN_SCOPE="127.0.0.1"
+    print_ok "Verified MariaDB root access on 127.0.0.1:3306"
+    return 0
+  fi
+
+  if mysql_root_query "$mysql_bin" "$password" "SELECT 1;"; then
+    DB_CONNECT_HOST=""
+    DB_CONNECT_PORT=""
+    socket_path="$(mysql_root_scalar "$mysql_bin" "$password" "SELECT @@socket;" | "$AWK_BIN" 'NR == 1 {print $1}' || true)"
+    DB_CONNECT_SOCKET="$socket_path"
+    DB_USER_HOST_LOGIN_SCOPE=""
+    if [[ -n "$DB_CONNECT_SOCKET" ]]; then
+      print_ok "Verified MariaDB root access over socket $DB_CONNECT_SOCKET"
+    else
+      print_ok "Verified MariaDB root access"
+    fi
+    return 0
+  fi
+
+  return 1
+}
+
+run_mariadb_root_sql() {
+  local password=$1
+  local query=$2
+  local mysql_bin=""
+
+  mysql_bin="$(find_mysql_client_bin || true)"
+  if [[ -z "$mysql_bin" ]]; then
+    return 1
+  fi
+
+  if [[ -n "$DB_CONNECT_SOCKET" ]]; then
+    mysql_root_query "$mysql_bin" "$password" "$query" --socket="$DB_CONNECT_SOCKET"
+  elif [[ -n "$DB_CONNECT_HOST" ]]; then
+    mysql_root_query "$mysql_bin" "$password" "$query" --protocol=TCP --host="$DB_CONNECT_HOST" --port="${DB_CONNECT_PORT:-3306}"
+  else
+    mysql_root_query "$mysql_bin" "$password" "$query"
+  fi
+}
+
+print_uv_update_instructions() {
+  local uv_bin=$1
+
+  print_info "Update uv with the package manager that installed it, then rerun this installer."
+  print_info "Detected uv binary: $uv_bin"
+
+  if [[ -n "$BREW_BIN" ]] && "$BREW_BIN" list --versions uv >/dev/null 2>&1; then
+    print_info "Homebrew: $BREW_BIN upgrade uv"
+  fi
+
+  if command -v python3 >/dev/null 2>&1 && python3 -m pip show uv >/dev/null 2>&1; then
+    print_info "pip: python3 -m pip install --upgrade uv"
+  fi
+
+  print_info "Standalone install: $CURL_BIN -LsSf $UV_INSTALL_URL | /bin/sh"
+}
+
+uv_is_package_managed() {
+  local uv_bin=$1
+  local brew_uv=""
+  local python_scripts_dir=""
+  local python_user_base=""
+
+  if [[ -n "$BREW_BIN" ]] && "$BREW_BIN" list --versions uv >/dev/null 2>&1; then
+    brew_uv="$("$BREW_BIN" --prefix uv 2>/dev/null || true)"
+    if [[ -n "$brew_uv" && "$uv_bin" == "$brew_uv/bin/uv" ]]; then
+      return 0
+    fi
+  fi
+
+  if command -v python3 >/dev/null 2>&1 && python3 -m pip show uv >/dev/null 2>&1; then
+    python_scripts_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))' 2>/dev/null || true)"
+    python_user_base="$(python3 -m site --user-base 2>/dev/null || true)"
+    if [[ -n "$python_scripts_dir" && "$uv_bin" == "$python_scripts_dir/uv" ]]; then
+      return 0
+    fi
+    if [[ "$uv_bin" == "$HOME/.local/bin/uv" ]]; then
+      return 0
+    fi
+    if [[ -n "$python_user_base" && "$uv_bin" == "$python_user_base/bin/uv" ]]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+ensure_uv_min_version() {
+  local uv_bin=$1
+  local version
+
+  version="$(get_uv_version "$uv_bin")"
+
+  if [[ -z "$version" ]]; then
+    print_error "Could not determine uv version from $uv_bin"
+    print_uv_update_instructions "$uv_bin"
+    exit 1
+  fi
+
+  if version_ge "$version" "$MIN_UV_VERSION"; then
+    print_ok "Using uv $version at $uv_bin"
+    return 0
+  fi
+
+  print_warn "uv $version is older than required $MIN_UV_VERSION"
+
+  if uv_is_package_managed "$uv_bin"; then
+    print_uv_update_instructions "$uv_bin"
+    exit 1
+  fi
+
+  print_info "Trying uv self update for standalone uv installs"
+
+  if run_silent "Updating uv" "$uv_bin" self update; then
+    version="$(get_uv_version "$uv_bin")"
+    if [[ -n "$version" ]] && version_ge "$version" "$MIN_UV_VERSION"; then
+      print_ok "Using uv $version at $uv_bin"
+      return 0
+    fi
+  fi
+
+  print_error "uv $version is still older than required $MIN_UV_VERSION"
+  print_uv_update_instructions "$uv_bin"
+  exit 1
+}
+
 cleanup() {
   local exit_code=$?
   if [[ $exit_code -eq 0 ]]; then
@@ -171,6 +438,8 @@ BASENAME_BIN="/usr/bin/basename"
 TAIL_BIN="/usr/bin/tail"
 DIRNAME_BIN="/usr/bin/dirname"
 PWD_BIN="/bin/pwd"
+DATE_BIN="/bin/date"
+MV_BIN="/bin/mv"
 INSTALLER_BIN="/usr/sbin/installer"
 SHASUM_BIN="/usr/bin/shasum"
 SUDO_BIN="/usr/bin/sudo"
@@ -182,6 +451,7 @@ DISK_AVAILABLE_GB=""
 BREW_BIN=""
 BREW_VERSION=""
 HOMEBREW_PREFIX=""
+UV_BIN=""
 
 FRAPPE_VERSION=""
 PYTHON_VERSION=""
@@ -192,6 +462,10 @@ INSTALL_ERPNEXT="Y"
 ADMIN_PASSWORD="admin"
 SKIP_INIT="n"
 DB_ROOT_PASSWORD=""
+DB_CONNECT_HOST=""
+DB_CONNECT_PORT=""
+DB_CONNECT_SOCKET=""
+DB_USER_HOST_LOGIN_SCOPE=""
 
 MARIADB_INSTALLED="false"
 MARIADB_PORT_IN_USE="false"
@@ -484,6 +758,11 @@ prompt_for_inputs() {
     if [[ "$MARIADB_ROOT_PASSWORDLESS" == "true" ]]; then
       print_ok "Detected passwordless MariaDB root access"
       DB_ROOT_PASSWORD=""
+      if ! validate_mariadb_root_access "$DB_ROOT_PASSWORD"; then
+        print_error "Could not verify MariaDB root access before site creation."
+        print_info "Check that MariaDB is running and that root can run: SELECT 1"
+        exit 1
+      fi
     else
       read -rp "  Do you remember your MariaDB root password? [Y/n]: " remembers_db_password
       if [[ "${remembers_db_password:-Y}" =~ ^[Nn]$ ]]; then
@@ -492,8 +771,28 @@ prompt_for_inputs() {
         print_info "Then re-run this installer."
         exit 1
       fi
-      read -rsp "  MariaDB root password: " DB_ROOT_PASSWORD
-      echo ""
+
+      local root_password_verified="false"
+      local attempt=1
+      while (( attempt <= 3 )); do
+        read -rsp "  MariaDB root password: " DB_ROOT_PASSWORD
+        echo ""
+
+        if validate_mariadb_root_access "$DB_ROOT_PASSWORD"; then
+          root_password_verified="true"
+          break
+        fi
+
+        print_warn "MariaDB root password did not work (attempt $attempt of 3)"
+        attempt=$((attempt + 1))
+      done
+
+      if [[ "$root_password_verified" != "true" ]]; then
+        print_error "Could not verify MariaDB root password."
+        print_info "Reset root password first (guide): $MARIADB_RESET_GUIDE_URL"
+        print_info "Then re-run this installer."
+        exit 1
+      fi
     fi
   fi
 
@@ -715,23 +1014,24 @@ install_uv() {
   CURRENT_STEP="Installing uv"
   print_header "Installing uv"
 
-  UV_BIN="$HOME/.local/bin/uv"
+  UV_BIN="$(find_uv_bin || true)"
 
-  if [[ ! -f "$UV_BIN" ]]; then
+  if [[ -z "$UV_BIN" ]]; then
     run_silent "Installing uv (Python manager)" \
       "$BASH_BIN" -c "set -euo pipefail; \"$CURL_BIN\" -LsSf \"$UV_INSTALL_URL\" | /bin/sh"
-  else
-    run_silent "Updating uv" "$UV_BIN" self update
+    UV_BIN="$HOME/.local/bin/uv"
   fi
 
   if [[ ! -x "$UV_BIN" ]]; then
-    print_error "uv binary not found at $UV_BIN after installation/update"
+    print_error "uv binary not found at $UV_BIN after installation"
     print_info "Check network/proxy and rerun the installer"
     print_info "Manual command: $CURL_BIN -LsSf $UV_INSTALL_URL | /bin/sh"
     exit 1
   fi
 
-  export PATH="$HOME/.local/bin:$PATH"
+  ensure_uv_min_version "$UV_BIN"
+
+  export PATH="$("$DIRNAME_BIN" "$UV_BIN"):$HOME/.local/bin:$PATH"
 }
 
 install_volta() {
@@ -819,18 +1119,88 @@ initialize_bench() {
   cd "$HOME/$BENCH_NAME"
 }
 
+site_has_frappe_app() {
+  local site=$1
+  local installed_apps=""
+
+  if ! installed_apps="$("$BENCH_BIN" --site "$site" list-apps 2>/dev/null)"; then
+    return 1
+  fi
+
+  printf '%s\n' "$installed_apps" | "$AWK_BIN" '{print $1}' | "$GREP_BIN" -qx "frappe"
+}
+
+reset_site_mariadb_user() {
+  local db_user=$1
+  local hosts=()
+  local host=""
+  local seen_hosts=" "
+  local sql=""
+
+  if [[ -n "$DB_USER_HOST_LOGIN_SCOPE" ]]; then
+    hosts+=("$DB_USER_HOST_LOGIN_SCOPE")
+  fi
+
+  hosts+=("localhost" "127.0.0.1" "%")
+
+  for host in "${hosts[@]}"; do
+    if [[ "$seen_hosts" == *" $host "* ]]; then
+      continue
+    fi
+    seen_hosts="${seen_hosts}${host} "
+    sql+="DROP USER IF EXISTS '$db_user'@'$host';"
+  done
+
+  run_mariadb_root_sql "$DB_ROOT_PASSWORD" "$sql"
+}
+
 create_site() {
   CURRENT_STEP="Creating site"
   print_header "Creating site"
+  local site_path="$HOME/$BENCH_NAME/sites/$SITE_NAME"
+  local db_name="${SITE_NAME//./_}"
+  local recreate_site="false"
+  local site_ready="false"
 
-  if [[ -d "$HOME/$BENCH_NAME/sites/$SITE_NAME" ]]; then
-    print_warn "Site $SITE_NAME already exists - skipping site creation"
-  else
-    run_silent "Creating site $SITE_NAME" \
-      "$BENCH_BIN" new-site "$SITE_NAME" \
-        --mariadb-root-password "$DB_ROOT_PASSWORD" \
-        --admin-password "$ADMIN_PASSWORD" \
-        --db-name "${SITE_NAME//./_}"
+  if [[ -d "$site_path" ]]; then
+    if site_has_frappe_app "$SITE_NAME"; then
+      print_warn "Site $SITE_NAME already exists - skipping site creation"
+      site_ready="true"
+    else
+      local backup_path="$site_path.failed-$("$DATE_BIN" +%Y%m%d%H%M%S)"
+      print_warn "Site directory exists but is not usable; moving it aside before retry"
+      run_silent "Moving partial site $SITE_NAME aside" "$MV_BIN" "$site_path" "$backup_path"
+      print_info "Partial site backup: $backup_path"
+      recreate_site="true"
+    fi
+  fi
+
+  if [[ "$site_ready" != "true" ]]; then
+    local new_site_args=(
+      "$BENCH_BIN" new-site "$SITE_NAME"
+      --mariadb-root-password "$DB_ROOT_PASSWORD"
+      --admin-password "$ADMIN_PASSWORD"
+      --db-name "$db_name"
+    )
+
+    if [[ "$recreate_site" == "true" ]]; then
+      new_site_args+=(--force)
+      if [[ "$MANAGE_MARIADB" != "true" ]]; then
+        run_silent "Resetting stale MariaDB user $db_name" reset_site_mariadb_user "$db_name"
+      fi
+    fi
+
+    if [[ -n "$DB_CONNECT_SOCKET" ]]; then
+      new_site_args+=(--db-socket "$DB_CONNECT_SOCKET")
+    elif [[ -n "$DB_CONNECT_HOST" ]]; then
+      new_site_args+=(--db-host "$DB_CONNECT_HOST" --db-port "${DB_CONNECT_PORT:-3306}")
+    fi
+
+    if [[ -n "$DB_USER_HOST_LOGIN_SCOPE" ]]; then
+      new_site_args+=(--mariadb-user-host-login-scope "$DB_USER_HOST_LOGIN_SCOPE")
+    fi
+
+    run_silent "Creating site $SITE_NAME" "${new_site_args[@]}"
   fi
 
   run_silent "Setting default site" "$BENCH_BIN" use "$SITE_NAME"

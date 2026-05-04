@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-05-04
+
+### Fixed
+
+- Validated safe-mode MariaDB root passwords before site creation and allowed up to three attempts.
+- Used the verified MariaDB connection route during safe-mode site creation so Frappe's Python setup and shell-based SQL import target the same local database server.
+- Recovered from partial failed site directories by moving them aside on rerun, forcing site recreation, and resetting stale target MariaDB users.
+
+## [1.0.3] - 2026-05-04
+
+### Fixed
+
+- Avoided failing on package-manager-installed `uv` binaries by validating a minimum `uv` version before attempting any self-update.
+- Added package-manager-specific `uv` update guidance when the detected version is too old.
+
 ## [1.0.2] - 2026-05-04
 
 ### Fixed

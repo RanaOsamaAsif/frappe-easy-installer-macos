@@ -48,6 +48,7 @@ If the installer detects port `3306` already in use, it now asks:
 Choose `Y` (recommended) to avoid modifying your current MariaDB configuration, auth, and service state.
 
 If root passwordless access is unavailable in safe mode, the script asks whether you remember the root password.
+It now validates the password immediately and gives you up to three attempts before continuing.
 If you do not, it fails fast and points you to the reset guide:
 
 - https://gist.github.com/petehouston/13bfc8cba1991cc6741fbe28cfa5491c
@@ -74,11 +75,11 @@ Rules:
 
 1. Runs compatibility and environment checks.
 2. Installs required dependencies (`mariadb`, `redis`) and installs `wkhtmltopdf` via Homebrew or the upstream macOS package fallback.
-3. Installs or updates `uv` and `volta`.
+3. Installs `uv` if missing, otherwise validates `uv >= 0.9.0` and only updates when too old; installs or updates `volta`.
 4. Creates a dedicated bench CLI virtual environment.
 5. Initializes bench (or reuses existing bench if selected).
 6. Starts the bench-local Redis services needed by app install hooks.
-7. Creates/uses site, optionally installs ERPNext and apps from `apps.txt`, then builds assets.
+7. Creates/uses site, optionally installs ERPNext and apps from `apps.txt`, then builds assets. Partial failed site directories are moved aside on rerun before retrying site creation.
 8. Runs a final health check for bench, site, installed apps, and key binaries.
 9. Stops only temporary bench Redis services started by this installer, then persists minimal shell exports for `uv`/`volta`.
 
