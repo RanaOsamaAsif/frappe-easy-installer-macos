@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-05-04
+
+### Fixed
+
+- Isolated Frappe's safe-mode MariaDB import client from user/global client option files, preventing inherited SSL-required settings from breaking local non-SSL MariaDB restores.
+
 ## [1.0.4] - 2026-05-04
 
 ### Fixed

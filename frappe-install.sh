@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="1.0.4"
+SCRIPT_VERSION="1.0.5"
 MIN_MACOS_MAJOR=13
 MIN_UV_VERSION="0.9.0"
 HOMEBREW_PREFIX_ARM="/opt/homebrew"
@@ -276,6 +276,7 @@ validate_mariadb_root_access() {
     print_info "Install MariaDB client tools or make mariadb/mysql available in PATH."
     return 1
   fi
+  DB_CLIENT_BIN="$mysql_bin"
 
   if mysql_root_query "$mysql_bin" "$password" "SELECT 1;" --protocol=TCP --host=127.0.0.1 --port=3306; then
     DB_CONNECT_HOST="127.0.0.1"
@@ -308,7 +309,10 @@ run_mariadb_root_sql() {
   local query=$2
   local mysql_bin=""
 
-  mysql_bin="$(find_mysql_client_bin || true)"
+  mysql_bin="${DB_CLIENT_BIN:-}"
+  if [[ -z "$mysql_bin" || ! -x "$mysql_bin" ]]; then
+    mysql_bin="$(find_mysql_client_bin || true)"
+  fi
   if [[ -z "$mysql_bin" ]]; then
     return 1
   fi
@@ -440,6 +444,7 @@ DIRNAME_BIN="/usr/bin/dirname"
 PWD_BIN="/bin/pwd"
 DATE_BIN="/bin/date"
 MV_BIN="/bin/mv"
+CHMOD_BIN="/bin/chmod"
 INSTALLER_BIN="/usr/sbin/installer"
 SHASUM_BIN="/usr/bin/shasum"
 SUDO_BIN="/usr/bin/sudo"
@@ -462,6 +467,7 @@ INSTALL_ERPNEXT="Y"
 ADMIN_PASSWORD="admin"
 SKIP_INIT="n"
 DB_ROOT_PASSWORD=""
+DB_CLIENT_BIN=""
 DB_CONNECT_HOST=""
 DB_CONNECT_PORT=""
 DB_CONNECT_SOCKET=""
@@ -1154,6 +1160,40 @@ reset_site_mariadb_user() {
   run_mariadb_root_sql "$DB_ROOT_PASSWORD" "$sql"
 }
 
+prepare_safe_mode_mariadb_client() {
+  if [[ "$MANAGE_MARIADB" == "true" ]]; then
+    return 0
+  fi
+
+  local mysql_bin="${DB_CLIENT_BIN:-}"
+  if [[ -z "$mysql_bin" || ! -x "$mysql_bin" ]]; then
+    mysql_bin="$(find_mysql_client_bin || true)"
+  fi
+
+  if [[ -z "$mysql_bin" || ! -x "$mysql_bin" ]]; then
+    print_error "MariaDB/MySQL client was not found"
+    print_info "Install MariaDB client tools or make mariadb/mysql available in PATH."
+    exit 1
+  fi
+
+  local shim_dir="$HOME/$BENCH_NAME/.frappe-installer-bin"
+  local wrapper=""
+
+  mkdir -p "$shim_dir"
+
+  for wrapper in mariadb mysql; do
+    cat > "$shim_dir/$wrapper" <<SHIM
+#!/usr/bin/env bash
+export MYSQL_TEST_LOGIN_FILE=/dev/null
+exec "$mysql_bin" --no-defaults "\$@"
+SHIM
+    "$CHMOD_BIN" 700 "$shim_dir/$wrapper"
+  done
+
+  export PATH="$shim_dir:$PATH"
+  print_ok "Using isolated MariaDB client for bench database import"
+}
+
 create_site() {
   CURRENT_STEP="Creating site"
   print_header "Creating site"
@@ -1200,6 +1240,7 @@ create_site() {
       new_site_args+=(--mariadb-user-host-login-scope "$DB_USER_HOST_LOGIN_SCOPE")
     fi
 
+    prepare_safe_mode_mariadb_client
     run_silent "Creating site $SITE_NAME" "${new_site_args[@]}"
   fi
 
