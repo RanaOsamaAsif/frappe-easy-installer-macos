@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.2"
 MIN_MACOS_MAJOR=13
 HOMEBREW_PREFIX_ARM="/opt/homebrew"
 HOMEBREW_PREFIX_INTEL="/usr/local"
@@ -147,6 +147,8 @@ cleanup() {
     return 0
   fi
 
+  stop_started_bench_redis "quiet" || true
+
   echo ""
   print_error "Installation failed at step: ${CURRENT_STEP:-unknown}"
   print_info "The script is idempotent - fix the issue above and re-run"
@@ -200,6 +202,7 @@ CUSTOM_APPS_FILE=""
 CUSTOM_APP_URLS=()
 CUSTOM_APP_BRANCHES=()
 CUSTOM_APP_NAMES=()
+BENCH_REDIS_STARTED_PORTS=()
 
 check_macos() {
   print_step "Checking macOS compatibility"
@@ -640,7 +643,7 @@ configure_services() {
 
   if [[ "$MANAGE_MARIADB" != "true" ]]; then
     print_warn "Safe mode enabled - skipping MariaDB config, restart, and root auth changes"
-    run_silent "Starting Redis" "$BREW_BIN" services start redis
+    print_ok "Redis formula available; bench Redis will start from bench config"
     return
   fi
 
@@ -705,7 +708,7 @@ SQL
 
   run_silent "Waiting for MariaDB" wait_for_mariadb
   run_silent "Configuring MariaDB root auth" configure_mariadb_root
-  run_silent "Starting Redis" "$BREW_BIN" services start redis
+  print_ok "Redis formula available; bench Redis will start from bench config"
 }
 
 install_uv() {
@@ -833,6 +836,225 @@ create_site() {
   run_silent "Setting default site" "$BENCH_BIN" use "$SITE_NAME"
 }
 
+resolve_redis_server_bin() {
+  local redis_server_bin="$HOMEBREW_PREFIX/bin/redis-server"
+  if [[ -x "$redis_server_bin" ]]; then
+    printf '%s\n' "$redis_server_bin"
+    return 0
+  fi
+
+  command -v redis-server 2>/dev/null
+}
+
+resolve_redis_cli_bin() {
+  local redis_cli_bin="$HOMEBREW_PREFIX/bin/redis-cli"
+  if [[ -x "$redis_cli_bin" ]]; then
+    printf '%s\n' "$redis_cli_bin"
+    return 0
+  fi
+
+  command -v redis-cli 2>/dev/null
+}
+
+redis_port_from_conf() {
+  local conf_file="$1"
+
+  "$AWK_BIN" '
+    $1 == "port" && $2 ~ /^[0-9]+$/ {
+      print $2
+      exit
+    }
+  ' "$conf_file"
+}
+
+redis_dir_from_conf() {
+  local conf_file="$1"
+
+  "$AWK_BIN" '
+    $1 == "dir" {
+      value = $2
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$conf_file"
+}
+
+normalize_redis_dir() {
+  local dir_path="$1"
+
+  if [[ -z "$dir_path" ]]; then
+    return 0
+  fi
+
+  case "$dir_path" in
+    /*) ;;
+    *) dir_path="$HOME/$BENCH_NAME/$dir_path" ;;
+  esac
+
+  if [[ -d "$dir_path" ]]; then
+    (cd "$dir_path" && "$PWD_BIN" -P)
+  else
+    printf '%s\n' "$dir_path"
+  fi
+}
+
+redis_ping_port() {
+  local redis_cli_bin="$1"
+  local port="$2"
+
+  "$redis_cli_bin" -h 127.0.0.1 -p "$port" ping 2>/dev/null | "$GREP_BIN" -qx "PONG"
+}
+
+redis_running_dir() {
+  local redis_cli_bin="$1"
+  local port="$2"
+
+  "$redis_cli_bin" -h 127.0.0.1 -p "$port" config get dir 2>/dev/null \
+    | "$AWK_BIN" 'NR == 2 { print; exit }'
+}
+
+redis_port_matches_conf() {
+  local redis_cli_bin="$1"
+  local port="$2"
+  local conf_file="$3"
+  local expected_dir=""
+  local actual_dir=""
+
+  expected_dir="$(normalize_redis_dir "$(redis_dir_from_conf "$conf_file")")"
+  actual_dir="$(normalize_redis_dir "$(redis_running_dir "$redis_cli_bin" "$port")")"
+
+  [[ -z "$expected_dir" || -z "$actual_dir" || "$expected_dir" == "$actual_dir" ]]
+}
+
+wait_for_redis_port() {
+  local redis_cli_bin="$1"
+  local port="$2"
+  local tries=0
+
+  until redis_ping_port "$redis_cli_bin" "$port"; do
+    tries=$((tries + 1))
+    if [[ $tries -ge 40 ]]; then
+      print_error "Redis on port $port did not become ready in time"
+      return 1
+    fi
+    sleep 0.25
+  done
+}
+
+ensure_bench_redis_services() {
+  CURRENT_STEP="Starting bench Redis services"
+  print_header "Starting bench Redis services"
+
+  local redis_server_bin
+  local redis_cli_bin
+  redis_server_bin="$(resolve_redis_server_bin || true)"
+  redis_cli_bin="$(resolve_redis_cli_bin || true)"
+
+  if [[ -z "$redis_server_bin" || ! -x "$redis_server_bin" ]]; then
+    print_error "redis-server was not found"
+    print_info "Install Redis with: $BREW_BIN install redis"
+    exit 1
+  fi
+
+  if [[ -z "$redis_cli_bin" || ! -x "$redis_cli_bin" ]]; then
+    print_error "redis-cli was not found"
+    print_info "Install Redis with: $BREW_BIN install redis"
+    exit 1
+  fi
+
+  local config_dir="$HOME/$BENCH_NAME/config"
+  local redis_configs=(
+    "$config_dir/redis_queue.conf"
+    "$config_dir/redis_cache.conf"
+    "$config_dir/redis_socketio.conf"
+  )
+  local conf_file=""
+  local port=""
+  local label=""
+  local seen_ports=" "
+  local found_config="false"
+
+  mkdir -p "$config_dir/pids" "$HOME/$BENCH_NAME/logs"
+
+  for conf_file in "${redis_configs[@]}"; do
+    [[ -f "$conf_file" ]] || continue
+    found_config="true"
+
+    label="$("$BASENAME_BIN" "$conf_file")"
+    port="$(redis_port_from_conf "$conf_file")"
+
+    if [[ -z "$port" ]]; then
+      print_warn "Could not read Redis port from $label - skipping"
+      continue
+    fi
+
+    if [[ "$seen_ports" == *" $port "* ]]; then
+      print_ok "Bench Redis port $port already covered"
+      continue
+    fi
+    seen_ports="${seen_ports}${port} "
+
+    if redis_ping_port "$redis_cli_bin" "$port"; then
+      if redis_port_matches_conf "$redis_cli_bin" "$port" "$conf_file"; then
+        print_ok "Bench Redis $label is already running on port $port"
+        continue
+      fi
+
+      print_error "Redis port $port is already used by a different Redis instance"
+      print_info "Stop the other bench first, or change this bench's Redis ports before rerunning."
+      print_info "Current config: $conf_file"
+      exit 1
+    fi
+
+    run_silent "Starting bench Redis $label on port $port" \
+      "$redis_server_bin" "$conf_file" --daemonize yes
+    BENCH_REDIS_STARTED_PORTS+=("$port")
+    run_silent "Waiting for bench Redis $label" wait_for_redis_port "$redis_cli_bin" "$port"
+  done
+
+  if [[ "$found_config" != "true" ]]; then
+    print_error "Bench Redis config files were not found in $config_dir"
+    print_info "Re-run bench init or check that $HOME/$BENCH_NAME is a valid bench directory"
+    exit 1
+  fi
+}
+
+stop_started_bench_redis() {
+  local mode="${1:-normal}"
+
+  if [[ ${#BENCH_REDIS_STARTED_PORTS[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  local redis_cli_bin
+  redis_cli_bin="$(resolve_redis_cli_bin || true)"
+
+  if [[ -z "$redis_cli_bin" || ! -x "$redis_cli_bin" ]]; then
+    BENCH_REDIS_STARTED_PORTS=()
+    return 0
+  fi
+
+  if [[ "$mode" != "quiet" ]]; then
+    print_header "Stopping temporary bench Redis services"
+  fi
+
+  local port=""
+  for port in "${BENCH_REDIS_STARTED_PORTS[@]}"; do
+    if redis_ping_port "$redis_cli_bin" "$port"; then
+      if "$redis_cli_bin" -h 127.0.0.1 -p "$port" shutdown nosave >/dev/null 2>&1; then
+        [[ "$mode" == "quiet" ]] || print_ok "Stopped bench Redis on port $port"
+      else
+        [[ "$mode" == "quiet" ]] || print_warn "Could not stop bench Redis on port $port"
+      fi
+    else
+      [[ "$mode" == "quiet" ]] || print_ok "Bench Redis on port $port is already stopped"
+    fi
+  done
+
+  BENCH_REDIS_STARTED_PORTS=()
+}
+
 install_erpnext_if_requested() {
   CURRENT_STEP="Installing ERPNext"
 
@@ -849,11 +1071,22 @@ install_erpnext_if_requested() {
     print_ok "ERPNext app already fetched"
   fi
 
+  local erpnext_marker="$HOME/$BENCH_NAME/sites/$SITE_NAME/.frappe-installer-erpnext-installed"
+
   if "$BENCH_BIN" --site "$SITE_NAME" list-apps 2>/dev/null | $GREP_BIN -qx "erpnext"; then
-    print_ok "ERPNext already installed on $SITE_NAME"
+    if [[ -f "$erpnext_marker" ]]; then
+      print_ok "ERPNext already installed on $SITE_NAME"
+    else
+      print_warn "ERPNext is listed on $SITE_NAME, but installer completion marker is missing"
+      print_info "Re-running install with --force to recover from possible partial installation"
+      run_silent "Repairing ERPNext install on $SITE_NAME" \
+        "$BENCH_BIN" --site "$SITE_NAME" install-app erpnext --force
+      touch "$erpnext_marker"
+    fi
   else
     run_silent "Installing ERPNext on $SITE_NAME" \
       "$BENCH_BIN" --site "$SITE_NAME" install-app erpnext
+    touch "$erpnext_marker"
   fi
 }
 
@@ -1159,11 +1392,13 @@ main() {
   install_volta
   install_bench_cli
   initialize_bench
+  ensure_bench_redis_services
   create_site
   install_erpnext_if_requested
   install_custom_apps_if_present
   build_assets
   final_health_check
+  stop_started_bench_redis
   persist_shell_env
   print_completion
 }

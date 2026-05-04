@@ -19,6 +19,7 @@ A single interactive Bash script that sets up a complete Frappe development envi
 - Optional ERPNext installation.
 - Optional ordered custom app installation from `apps.txt`.
 - Safe mode for existing MariaDB installs (recommended when migrating an existing setup).
+- Starts only the current bench's Redis queue/cache services during installs, then stops the temporary Redis processes it started.
 - Final health check before completion.
 - Clear spinner-based UX with full logs only on failure.
 
@@ -76,9 +77,10 @@ Rules:
 3. Installs or updates `uv` and `volta`.
 4. Creates a dedicated bench CLI virtual environment.
 5. Initializes bench (or reuses existing bench if selected).
-6. Creates/uses site, optionally installs ERPNext and apps from `apps.txt`, then builds assets.
-7. Runs a final health check for bench, site, installed apps, and key binaries.
-8. Persists minimal shell exports for `uv`/`volta`.
+6. Starts the bench-local Redis services needed by app install hooks.
+7. Creates/uses site, optionally installs ERPNext and apps from `apps.txt`, then builds assets.
+8. Runs a final health check for bench, site, installed apps, and key binaries.
+9. Stops only temporary bench Redis services started by this installer, then persists minimal shell exports for `uv`/`volta`.
 
 ## Scope
 

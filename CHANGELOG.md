@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-05-04
+
+### Fixed
+
+- Started bench-local Redis queue/cache services before site app installs so ERPNext v16 install hooks can enqueue jobs on ports such as `11000`.
+- Stopped only the temporary bench Redis services started by the installer, preserving existing manual benches.
+- Added an ERPNext partial-install recovery path that reruns `install-app erpnext --force` when ERPNext is listed but the installer completion marker is missing.
+
 ## [1.0.1] - 2026-04-16
 
 ### Added
