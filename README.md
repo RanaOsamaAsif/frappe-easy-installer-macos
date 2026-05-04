@@ -72,7 +72,7 @@ Rules:
 ## What This Installer Does
 
 1. Runs compatibility and environment checks.
-2. Installs required dependencies (`mariadb`, `redis`, `wkhtmltopdf`) when needed.
+2. Installs required dependencies (`mariadb`, `redis`) and installs `wkhtmltopdf` via Homebrew or the upstream macOS package fallback.
 3. Installs or updates `uv` and `volta`.
 4. Creates a dedicated bench CLI virtual environment.
 5. Initializes bench (or reuses existing bench if selected).
@@ -84,6 +84,12 @@ Rules:
 
 - Intended for local development only.
 - Not a production deployment script.
+
+## PDF Generation Note
+
+Homebrew has removed the `wkhtmltopdf` cask because the project is discontinued upstream. When that happens, the installer downloads the archived upstream macOS package to `/tmp/wkhtmltox-0.12.6-2.macos-cocoa.pkg`, verifies its SHA-256 checksum, and installs it with `sudo installer`.
+
+The package installs `wkhtmltopdf` to `/usr/local/bin/wkhtmltopdf`. If sudo is unavailable or the package install fails, the rest of the Frappe setup continues, but PDF generation needs `wkhtmltopdf` available in `PATH`.
 
 ## License
 

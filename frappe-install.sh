@@ -9,6 +9,12 @@ HOMEBREW_PREFIX_INTEL="/usr/local"
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 VOLTA_INSTALL_URL="https://get.volta.sh"
 MARIADB_RESET_GUIDE_URL="https://gist.github.com/petehouston/13bfc8cba1991cc6741fbe28cfa5491c"
+WKHTMLTOPDF_DOWNLOADS_URL="https://wkhtmltopdf.org/downloads.html"
+WKHTMLTOPDF_PKG_VERSION="0.12.6-2"
+WKHTMLTOPDF_PKG_NAME="wkhtmltox-${WKHTMLTOPDF_PKG_VERSION}.macos-cocoa.pkg"
+WKHTMLTOPDF_PKG_URL="https://github.com/wkhtmltopdf/packaging/releases/download/${WKHTMLTOPDF_PKG_VERSION}/${WKHTMLTOPDF_PKG_NAME}"
+WKHTMLTOPDF_PKG_SHA256="81a66b77b508fede8dbcaa67127203748376568b3673a17f6611b6d51e9894f8"
+WKHTMLTOPDF_INSTALL_BIN="/usr/local/bin/wkhtmltopdf"
 
 FRAPPE_15_PYTHON="3.11"
 FRAPPE_15_NODE="18"
@@ -137,7 +143,10 @@ run_silent() {
 
 cleanup() {
   local exit_code=$?
-  [[ $exit_code -ne 0 ]] || return
+  if [[ $exit_code -eq 0 ]]; then
+    return 0
+  fi
+
   echo ""
   print_error "Installation failed at step: ${CURRENT_STEP:-unknown}"
   print_info "The script is idempotent - fix the issue above and re-run"
@@ -160,6 +169,9 @@ BASENAME_BIN="/usr/bin/basename"
 TAIL_BIN="/usr/bin/tail"
 DIRNAME_BIN="/usr/bin/dirname"
 PWD_BIN="/bin/pwd"
+INSTALLER_BIN="/usr/sbin/installer"
+SHASUM_BIN="/usr/bin/shasum"
+SUDO_BIN="/usr/bin/sudo"
 
 ARCH=""
 MACOS_VERSION=""
@@ -523,11 +535,7 @@ install_dependencies() {
     run_silent "Installing Redis" "$BREW_BIN" install redis
   fi
 
-  if "$BREW_BIN" list --cask wkhtmltopdf >/dev/null 2>&1; then
-    print_ok "wkhtmltopdf already installed"
-  else
-    run_silent "Installing wkhtmltopdf" "$BREW_BIN" install --cask wkhtmltopdf
-  fi
+  install_wkhtmltopdf
 
   if "$BREW_BIN" list mariadb-connector-c >/dev/null 2>&1; then
     print_ok "mariadb-connector-c already installed"
@@ -544,6 +552,86 @@ install_dependencies() {
   if [[ -d "$HOMEBREW_PREFIX/opt/mariadb@$MARIADB_VERSION/bin" ]]; then
     export PATH="$HOMEBREW_PREFIX/opt/mariadb@$MARIADB_VERSION/bin:$PATH"
   fi
+}
+
+install_wkhtmltopdf() {
+  if command -v wkhtmltopdf >/dev/null 2>&1; then
+    print_ok "wkhtmltopdf already available"
+    return
+  fi
+
+  if "$BREW_BIN" list --cask wkhtmltopdf >/dev/null 2>&1; then
+    print_ok "wkhtmltopdf cask already installed"
+    return
+  fi
+
+  if "$BREW_BIN" info --cask wkhtmltopdf >/dev/null 2>&1; then
+    if run_silent "Installing wkhtmltopdf" "$BREW_BIN" install --cask wkhtmltopdf; then
+      return
+    fi
+
+    print_warn "wkhtmltopdf could not be installed with Homebrew; trying upstream package fallback"
+  else
+    print_warn "wkhtmltopdf Homebrew cask is unavailable; trying upstream package fallback"
+  fi
+
+  install_wkhtmltopdf_pkg
+}
+
+verify_wkhtmltopdf_pkg() {
+  local pkg_path=$1
+  local actual_sha
+
+  [[ -f "$pkg_path" ]] || return 1
+
+  actual_sha="$("$SHASUM_BIN" -a 256 "$pkg_path" | "$AWK_BIN" '{print $1}')"
+  [[ "$actual_sha" == "$WKHTMLTOPDF_PKG_SHA256" ]]
+}
+
+install_wkhtmltopdf_pkg() {
+  local pkg_path="/tmp/$WKHTMLTOPDF_PKG_NAME"
+
+  if verify_wkhtmltopdf_pkg "$pkg_path"; then
+    print_ok "wkhtmltopdf package already downloaded"
+  else
+    rm -f "$pkg_path"
+    if ! run_silent "Downloading wkhtmltopdf package" "$CURL_BIN" -fL -o "$pkg_path" "$WKHTMLTOPDF_PKG_URL"; then
+      print_warn "Could not download wkhtmltopdf package; continuing without it"
+      print_info "Manual download: $WKHTMLTOPDF_DOWNLOADS_URL"
+      return 0
+    fi
+  fi
+
+  if ! verify_wkhtmltopdf_pkg "$pkg_path"; then
+    print_warn "Downloaded wkhtmltopdf package checksum did not match; skipping package install"
+    print_info "Manual download: $WKHTMLTOPDF_DOWNLOADS_URL"
+    rm -f "$pkg_path"
+    return 0
+  fi
+
+  print_info "Installing wkhtmltopdf package requires sudo and may ask for your macOS password."
+  if ! "$SUDO_BIN" -v; then
+    print_warn "Could not acquire sudo privileges; continuing without wkhtmltopdf"
+    print_info "Manual install: sudo installer -pkg $pkg_path -target /"
+    return 0
+  fi
+
+  if ! run_silent "Installing wkhtmltopdf package" "$SUDO_BIN" "$INSTALLER_BIN" -pkg "$pkg_path" -target /; then
+    print_warn "wkhtmltopdf package installation failed; continuing without it"
+    print_info "Manual install: sudo installer -pkg $pkg_path -target /"
+    return 0
+  fi
+
+  export PATH="/usr/local/bin:$PATH"
+
+  if [[ -x "$WKHTMLTOPDF_INSTALL_BIN" ]] || command -v wkhtmltopdf >/dev/null 2>&1; then
+    print_ok "wkhtmltopdf package installed"
+  else
+    print_warn "wkhtmltopdf package installed, but wkhtmltopdf was not found in PATH"
+    print_info "Expected binary: $WKHTMLTOPDF_INSTALL_BIN"
+  fi
+
+  return 0
 }
 
 configure_services() {
@@ -980,8 +1068,12 @@ final_health_check() {
   wkhtmltopdf_bin="$(command -v wkhtmltopdf || true)"
   if [[ -n "$wkhtmltopdf_bin" ]]; then
     print_ok "wkhtmltopdf is available"
+  elif [[ -x "$WKHTMLTOPDF_INSTALL_BIN" ]]; then
+    print_warn "wkhtmltopdf is installed at $WKHTMLTOPDF_INSTALL_BIN but was not found in PATH"
+    print_info "Add /usr/local/bin to PATH before generating PDFs"
   else
     print_warn "wkhtmltopdf was not found in PATH; PDF generation may need manual attention"
+    print_info "Manual download: $WKHTMLTOPDF_DOWNLOADS_URL"
   fi
 
   print_ok "Final health check passed"
