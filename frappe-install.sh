@@ -395,7 +395,7 @@ print_uv_update_instructions() {
 
 install_uv_standalone() {
   run_silent "Installing uv (standalone)" \
-    "$BASH_BIN" -c "set -euo pipefail; \"$CURL_BIN\" -LsSf \"$UV_INSTALL_URL\" | /bin/sh"
+    "$BASH_BIN" -c "set -euo pipefail; export UV_INSTALL_DIR=\"$HOME/.local/bin\"; \"$CURL_BIN\" -LsSf \"$UV_INSTALL_URL\" | /bin/sh"
 }
 
 use_standalone_uv_fallback() {
@@ -410,8 +410,8 @@ use_standalone_uv_fallback() {
     exit 1
   fi
 
-  UV_BIN="$(find_uv_bin || true)"
-  if [[ -z "$UV_BIN" || ! -x "$UV_BIN" ]]; then
+  UV_BIN="$HOME/.local/bin/uv"
+  if [[ ! -x "$UV_BIN" ]]; then
     print_error "uv binary not found after standalone installation"
     print_info "Expected location: $HOME/.local/bin/uv"
     print_uv_update_instructions "$previous_uv_bin"
