@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="1.0.7"
+SCRIPT_VERSION="1.0.8"
 MIN_MACOS_MAJOR=13
 MIN_UV_VERSION="0.9.0"
 HOMEBREW_PREFIX_ARM="/opt/homebrew"
@@ -393,6 +393,42 @@ print_uv_update_instructions() {
   print_info "Standalone install: $CURL_BIN -LsSf $UV_INSTALL_URL | /bin/sh"
 }
 
+install_uv_standalone() {
+  run_silent "Installing uv (standalone)" \
+    "$BASH_BIN" -c "set -euo pipefail; export UV_INSTALL_DIR=\"$HOME/.local/bin\"; \"$CURL_BIN\" -LsSf \"$UV_INSTALL_URL\" | /bin/sh"
+}
+
+use_standalone_uv_fallback() {
+  local previous_uv_bin=$1
+  local version=""
+
+  print_info "Installing standalone uv so this installer can continue"
+
+  if ! install_uv_standalone; then
+    print_error "Could not install standalone uv"
+    print_uv_update_instructions "$previous_uv_bin"
+    exit 1
+  fi
+
+  UV_BIN="$HOME/.local/bin/uv"
+  if [[ ! -x "$UV_BIN" ]]; then
+    print_error "uv binary not found after standalone installation"
+    print_info "Expected location: $HOME/.local/bin/uv"
+    print_uv_update_instructions "$previous_uv_bin"
+    exit 1
+  fi
+
+  version="$(get_uv_version "$UV_BIN")"
+  if [[ -n "$version" ]] && version_ge "$version" "$MIN_UV_VERSION"; then
+    print_ok "Using uv $version at $UV_BIN"
+    return 0
+  fi
+
+  print_error "Standalone uv ${version:-unknown} is older than required $MIN_UV_VERSION"
+  print_uv_update_instructions "$UV_BIN"
+  exit 1
+}
+
 uv_is_package_managed() {
   local uv_bin=$1
   local brew_uv=""
@@ -420,6 +456,10 @@ uv_is_package_managed() {
     fi
   fi
 
+  if [[ "$uv_bin" == "$HOME"/Library/Python/*/bin/uv ]]; then
+    return 0
+  fi
+
   return 1
 }
 
@@ -443,8 +483,9 @@ ensure_uv_min_version() {
   print_warn "uv $version is older than required $MIN_UV_VERSION"
 
   if uv_is_package_managed "$uv_bin"; then
-    print_uv_update_instructions "$uv_bin"
-    exit 1
+    print_info "Detected package-managed uv at $uv_bin"
+    use_standalone_uv_fallback "$uv_bin"
+    return 0
   fi
 
   print_info "Trying uv self update for standalone uv installs"
@@ -457,9 +498,8 @@ ensure_uv_min_version() {
     fi
   fi
 
-  print_error "uv $version is still older than required $MIN_UV_VERSION"
-  print_uv_update_instructions "$uv_bin"
-  exit 1
+  print_warn "uv ${version:-unknown} is still older than required $MIN_UV_VERSION after self update"
+  use_standalone_uv_fallback "$uv_bin"
 }
 
 cleanup() {
@@ -1073,8 +1113,7 @@ install_uv() {
   UV_BIN="$(find_uv_bin || true)"
 
   if [[ -z "$UV_BIN" ]]; then
-    run_silent "Installing uv (Python manager)" \
-      "$BASH_BIN" -c "set -euo pipefail; \"$CURL_BIN\" -LsSf \"$UV_INSTALL_URL\" | /bin/sh"
+    install_uv_standalone
     UV_BIN="$HOME/.local/bin/uv"
   fi
 

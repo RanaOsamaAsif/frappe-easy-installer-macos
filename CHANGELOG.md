@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-05-05
+
+### Fixed
+
+- Recovered from stale package-managed `uv` installs by falling back to a standalone `uv` installed directly into `~/.local/bin` when the detected `uv` is below the required version or self-update is unavailable.
+- Detected macOS pip user-script `uv` paths such as `~/Library/Python/3.11/bin/uv` before choosing the update strategy.
+
 ## [1.0.7] - 2026-05-04
 
 ### Fixed
